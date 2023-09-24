@@ -59,7 +59,9 @@ impl Inscription {
                 continue;
             }
 
-            let Ok(inscriptions) = InscriptionParser::parse(&tx_in.witness.clone().unwrap()) else { continue };
+            let Ok(inscriptions) = InscriptionParser::parse(&tx_in.witness.clone().unwrap()) else {
+                continue;
+            };
 
             result.extend(
                 inscriptions

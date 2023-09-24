@@ -221,12 +221,17 @@ impl<'block> InscriptionUpdater<'block> {
             }
 
             let previous_output = format!("{}:{}", tx_in.outpoint.txid, tx_in.outpoint.index);
-            let inscriptions_str_at_output = self
-                .output_inscription
-                .get(previous_output.as_bytes())
-                .unwrap_or_default();
-
-            let inscriptions_str = String::from_utf8(inscriptions_str_at_output)?;
+            let inscriptions_str = self
+                .output_inscription_cache
+                .entry(previous_output.clone())
+                .or_insert_with(|| {
+                    String::from_utf8(
+                        self.output_inscription
+                            .get(previous_output.as_bytes())
+                            .unwrap_or_default(),
+                    )
+                    .unwrap()
+                });
             if inscriptions_str != "" {
                 for (inscription_id, inscription_offset) in
                     inscriptions_str
