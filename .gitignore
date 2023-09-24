@@ -1,0 +1,11 @@
+/target
+
+# lib
+Cargo.lock
+
+# ide
+.idea
+.vscode
+
+# config
+.env
