@@ -36,6 +36,9 @@ fn main() -> anyhow::Result<()> {
     ordi.when_inscribe(inscribe);
     ordi.when_transfer(transfer);
 
+    // If index_previous_output_value is set true,
+    // dump-event would reindex utxos at height 767430.
+    // Else use rpc to get utxo like ord.
     if std::env::var("index_previous_output_value")? == "true" {
         ordi.index_output_value()?;
     }
