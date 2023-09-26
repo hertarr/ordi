@@ -1,6 +1,6 @@
 # ordi 
 
-`ordi` is a light indexer for building ordinals data source.
+`ordi` is a fast light indexer for building ordinals data source.
 
 ## Usage
 

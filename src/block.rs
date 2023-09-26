@@ -221,17 +221,22 @@ impl<'block> InscriptionUpdater<'block> {
             }
 
             let previous_output = format!("{}:{}", tx_in.outpoint.txid, tx_in.outpoint.index);
-            let inscriptions_str = self
-                .output_inscription_cache
-                .entry(previous_output.clone())
-                .or_insert_with(|| {
-                    String::from_utf8(
+            let inscriptions_str = match self.output_inscription_cache.get(&previous_output) {
+                Some(inscriptions) => inscriptions.clone(),
+                None => {
+                    let value = String::from_utf8(
                         self.output_inscription
                             .get(previous_output.as_bytes())
                             .unwrap_or_default(),
-                    )
-                    .unwrap()
-                });
+                    )?;
+                    if value != "" {
+                        self.output_inscription_cache
+                            .insert(previous_output.clone(), value.clone());
+                    }
+
+                    value
+                }
+            };
             if inscriptions_str != "" {
                 for (inscription_id, inscription_offset) in
                     inscriptions_str
@@ -327,7 +332,14 @@ impl<'block> InscriptionUpdater<'block> {
                         })
                         .unwrap();
 
-                    !(first_reinscription && initial_inscription_is_cursed)
+                    let cursed = !(first_reinscription && initial_inscription_is_cursed);
+                    info!(
+                        "new_inscription: {}, reinscription: {}, first_reinscription: {}, initial_inscription_is_cursed: {}",
+                        &inscription_id,
+                        cursed, first_reinscription,
+                        initial_inscription_is_cursed
+                    );
+                    cursed
                 } else {
                     curse.is_some()
                 };
