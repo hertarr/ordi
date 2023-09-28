@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use bitcoin::hashes::{sha256d, Hash};
 use byteorder::ReadBytesExt;
 use log::info;
-use rusty_leveldb::{LdbIterator, Options, DB};
+use rusty_leveldb::{LdbIterator, Options, Status, DB};
+use thiserror::Error;
 
-use crate::bitcoin::blk::BLK;
+use crate::bitcoin::blk::{BlkError, BLK};
 use crate::bitcoin::proto::block::Block;
 
 const INDEX_PATH: &str = "blocks/index";
@@ -18,19 +19,37 @@ const _DEFAULT_BLK_NUM: usize = 10000;
 const BLOCK_VALID_CHAIN: u64 = 4;
 const BLOCK_HAVE_DATA: u64 = 8;
 
+#[derive(Error, Debug)]
+pub enum IndexError {
+    #[error("Blk error: `{0}`")]
+    BlkError(#[from] BlkError),
+    #[error("Database index not found: `{0}`")]
+    DatabaseNotFound(String),
+    #[error("Invalid height `{0}` in entry, expect: `{1}`")]
+    InvalidHeight(u64, u64),
+    #[error("Entry not found")]
+    EntryNotFound,
+    #[error("Open database error: `{0}`")]
+    OpenDatabase(#[from] Status),
+    #[error("Read varint")]
+    IOError(#[from] std::io::Error),
+}
+
 fn parse_index_for_ordinals(
     btc_data_dir: &PathBuf,
-) -> anyhow::Result<(
-    HashMap<u64, IndexEntry>,
-    u64,
-    HashMap<u64, u64>,
-    HashMap<u64, BLK>,
-)> {
+) -> Result<
+    (
+        HashMap<u64, IndexEntry>,
+        u64,
+        HashMap<u64, u64>,
+        HashMap<u64, BLK>,
+    ),
+    IndexError,
+> {
     let index_path = btc_data_dir.join(INDEX_PATH);
     if !index_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Bitcoin index databse not found: {}",
-            index_path.to_str().unwrap()
+        return Err(IndexError::DatabaseNotFound(
+            index_path.to_str().unwrap().to_string(),
         ));
     }
 
@@ -46,9 +65,6 @@ fn parse_index_for_ordinals(
         if is_block_index_entry(&key) {
             let record = IndexEntry::from_leveldb_kv(&key[1..], &value)?;
             if record.status & (BLOCK_VALID_CHAIN | BLOCK_HAVE_DATA | BLOCK_VALID_CHAIN) > 0 {
-                // if (record.height as i64 - FIRST_INSCRIPTION_HEIGHT as i64) < 0 {
-                //     continue;
-                // }
                 let height_in_blk = max_height_in_blk
                     .entry(record.blk_index)
                     .or_insert(record.height);
@@ -70,14 +86,11 @@ fn parse_index_for_ordinals(
 
     for (height, entry) in index.iter() {
         if entry.height != *height {
-            return Err(anyhow::anyhow!(
-                "Found invalid entry at height: {}.",
-                height
-            ));
+            return Err(IndexError::InvalidHeight(entry.height, *height));
         }
     }
 
-    info!("No invalid entry until height: {}.", max_height);
+    info!("All index entries are valid until height: {}.", max_height);
     Ok((index, max_height, max_height_in_blk, blks))
 }
 
@@ -90,7 +103,7 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new(btc_data_dir: PathBuf) -> anyhow::Result<Index> {
+    pub fn new(btc_data_dir: PathBuf) -> Result<Index, IndexError> {
         let start = std::time::Instant::now();
 
         let (entries, max_height, max_height_in_blk, blks) =
@@ -106,7 +119,7 @@ impl Index {
         })
     }
 
-    pub fn catch_block(&mut self, height: u64) -> anyhow::Result<Block> {
+    pub fn catch_block(&mut self, height: u64) -> Result<Block, IndexError> {
         let (blk_index, data_offset) = self
             .get_index_entry(height)
             .map(|entry| (entry.blk_index, entry.data_offset))
@@ -121,7 +134,7 @@ impl Index {
             // todo: remove relevant variables
         }
 
-        block
+        Ok(block?)
     }
 
     pub fn get_index_entry(&self, height: u64) -> Option<&IndexEntry> {
@@ -131,12 +144,11 @@ impl Index {
     pub fn get_block_entry_by_block_hash(
         &mut self,
         block_hash: &[u8],
-    ) -> anyhow::Result<IndexEntry> {
+    ) -> Result<IndexEntry, IndexError> {
         let index_path = self.btc_data_dir.join(INDEX_PATH);
         if !index_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Bitcoin index databse not found: {}.",
-                index_path.to_str().unwrap()
+            return Err(IndexError::DatabaseNotFound(
+                index_path.to_str().unwrap().to_string(),
             ));
         }
 
@@ -149,7 +161,7 @@ impl Index {
             return Ok(IndexEntry::from_leveldb_kv(&key[1..], &value)?);
         }
 
-        return Err(anyhow::anyhow!("No index entry found."));
+        return Err(IndexError::EntryNotFound);
     }
 }
 
@@ -164,7 +176,7 @@ pub struct IndexEntry {
 }
 
 impl IndexEntry {
-    fn from_leveldb_kv(key: &[u8], value: &[u8]) -> anyhow::Result<IndexEntry> {
+    fn from_leveldb_kv(key: &[u8], value: &[u8]) -> Result<IndexEntry, IndexError> {
         let mut reader = Cursor::new(value);
 
         let block_hash: [u8; 32] = key.try_into().expect("malformed blockhash");
@@ -194,7 +206,7 @@ fn is_block_index_entry(data: &[u8]) -> bool {
 
 /// TODO: this is a wonky 1:1 translation from https://github.com/bitcoin/bitcoin
 /// It is NOT the same as CompactSize.
-fn read_varint(reader: &mut Cursor<&[u8]>) -> anyhow::Result<u64> {
+fn read_varint(reader: &mut Cursor<&[u8]>) -> Result<u64, IndexError> {
     let mut n = 0;
     loop {
         let ch_data = reader.read_u8()?;

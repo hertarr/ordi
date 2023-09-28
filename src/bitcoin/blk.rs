@@ -6,10 +6,19 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use seek_bufread::BufReader;
+use thiserror::Error;
 
 use crate::bitcoin::block_reader::BlockchainRead;
 use crate::bitcoin::proto::block::Block;
 use crate::bitcoin::Bitcoin;
+
+#[derive(Error, Debug)]
+pub enum BlkError {
+    #[error("Anyhow error")]
+    AnyhowError(#[from] anyhow::Error),
+    #[error("IO error")]
+    IOError(#[from] std::io::Error),
+}
 
 pub struct BLK {
     btc_data_dir: PathBuf,
@@ -43,11 +52,11 @@ impl BLK {
         }
     }
 
-    pub fn read_block(&mut self, data_offset: u64) -> anyhow::Result<Block> {
+    pub fn read_block(&mut self, data_offset: u64) -> Result<Block, BlkError> {
         let reader = self.reader.as_mut().unwrap();
         reader.seek(SeekFrom::Start(data_offset - 4))?;
         let block_size = reader.read_u32::<LittleEndian>()?;
         let coin = Bitcoin.into();
-        reader.read_block(block_size, &coin)
+        Ok(reader.read_block(block_size, &coin)?)
     }
 }

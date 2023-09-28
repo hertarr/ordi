@@ -1,11 +1,13 @@
+use std::env::VarError;
 use std::{path::PathBuf, thread, time::Duration};
 
-use anyhow::Result;
-use bitcoincore_rpc::{Client, RpcApi};
+use bitcoincore_rpc::{Client, Error, RpcApi};
 use log::info;
-use rusty_leveldb::{Options, WriteBatch, DB};
+use rusty_leveldb::{Options, Status, WriteBatch, DB};
+use thiserror::Error;
 
-use crate::block::{InscribeUpdater, TransferUpdater, Tx};
+use crate::bitcoin::index::IndexError;
+use crate::block::{BlockUpdaterError, InscribeUpdater, TransferUpdater, Tx};
 use crate::inscription::Inscription;
 use crate::{
     bitcoin::index::{Index, FIRST_INSCRIPTION_HEIGHT},
@@ -13,6 +15,7 @@ use crate::{
 };
 
 pub mod bitcoin;
+
 pub mod block;
 pub mod epoch;
 pub mod height;
@@ -23,6 +26,20 @@ const ORDI_OUTPUT_VALUE: &str = "output_value";
 const ORDI_ID_TO_INSCRIPTION: &str = "id_inscription";
 const ORDI_INSCRIPTION_TO_OUTPUT: &str = "inscription_output";
 const ORDI_OUTPUT_TO_INSCRIPTION: &str = "output_inscription";
+
+#[derive(Error, Debug)]
+pub enum OrdiError {
+    #[error("Var error: `{0}`")]
+    VarError(#[from] VarError),
+    #[error("Open leveldb error: `{0}`")]
+    OpenLevelDBError(#[from] Status),
+    #[error("Bitcoin rpc errpr: `{0}`")]
+    BitcoinRpcError(#[from] Error),
+    #[error("Index error: `{0}`")]
+    IndexError(#[from] IndexError),
+    #[error("BlockUpdater error: `{0}`")]
+    BlockUpdaterError(#[from] BlockUpdaterError),
+}
 
 pub struct Ordi {
     pub btc_rpc_client: Client,
@@ -37,7 +54,7 @@ pub struct Ordi {
 }
 
 impl Ordi {
-    pub fn new(in_memory: bool) -> Result<Ordi> {
+    pub fn new(in_memory: bool) -> Result<Ordi, OrdiError> {
         let mut options = if in_memory {
             rusty_leveldb::in_memory()
         } else {
@@ -93,7 +110,7 @@ impl Ordi {
             .expect("Close output_inscription db.");
     }
 
-    pub fn start(&mut self) -> anyhow::Result<()> {
+    pub fn start(&mut self) -> Result<(), OrdiError> {
         // Catch up latest block.
         let mut next_height = self.index.max_height + 1;
         for height in FIRST_INSCRIPTION_HEIGHT..next_height {
@@ -141,7 +158,7 @@ impl Ordi {
         }
     }
 
-    pub fn index_output_value(&mut self) -> Result<()> {
+    pub fn index_output_value(&mut self) -> Result<(), OrdiError> {
         for height in 0..FIRST_INSCRIPTION_HEIGHT {
             let block = self.index.catch_block(height)?;
             for (_tx_index, tx) in block.txs.iter().enumerate() {
@@ -152,7 +169,7 @@ impl Ordi {
         Ok(())
     }
 
-    fn index_output_value_in_transaction(&mut self, tx: &Tx) -> Result<()> {
+    fn index_output_value_in_transaction(&mut self, tx: &Tx) -> Result<(), OrdiError> {
         let mut wb = WriteBatch::new();
         for (output_index, output) in tx.value.outputs.iter().enumerate() {
             let k = format!("{}:{}", tx.hash.to_string(), output_index);
