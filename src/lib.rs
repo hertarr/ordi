@@ -51,7 +51,10 @@ impl Ordi {
         let id_inscription = DB::open(base_path.join(ORDI_ID_TO_INSCRIPTION), options.clone())?;
         let inscription_output =
             DB::open(base_path.join(ORDI_INSCRIPTION_TO_OUTPUT), options.clone())?;
-        let output_inscription = DB::open(base_path.join(ORDI_OUTPUT_TO_INSCRIPTION), options)?;
+        let output_inscription = DB::open(
+            base_path.join(ORDI_OUTPUT_TO_INSCRIPTION),
+            rusty_leveldb::in_memory(),
+        )?;
 
         let btc_data_dir = std::env::var("btc_data_dir")?;
         let btc_rpc_client = Client::new(
