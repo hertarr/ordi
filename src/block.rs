@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::num::TryFromIntError;
+use std::string::FromUtf8Error;
 
 use bitcoincore_rpc::{Client, RpcApi};
 use log::{debug, info, trace};
-use rusty_leveldb::{WriteBatch, DB};
+use rusty_leveldb::{Status, WriteBatch, DB};
+use thiserror::Error;
 
 use crate::{
     bitcoin::proto::{tx::EvaluatedTx, Hashed},
@@ -47,6 +50,12 @@ pub struct TransferEntry<'a> {
 pub type InscribeUpdater = fn(InscribeEntry);
 pub type TransferUpdater = fn(TransferEntry);
 
+#[derive(Error, Debug)]
+pub enum BlockUpdaterError {
+    #[error("InscriptionUpdater error: `{0}`")]
+    InscriptionUpdaterError(#[from] InscriptionUpdaterError),
+}
+
 pub struct BlockUpdater<'ordi> {
     pub height: u64,
     pub block: ProtoBlock,
@@ -87,7 +96,7 @@ impl<'ordi> BlockUpdater<'ordi> {
         }
     }
 
-    pub fn index_transactions(&mut self) -> anyhow::Result<()> {
+    pub fn index_transactions(&mut self) -> Result<(), BlockUpdaterError> {
         let start = std::time::Instant::now();
         let mut inscription_updater = InscriptionUpdater::new(
             self.height,
@@ -122,6 +131,18 @@ impl<'ordi> BlockUpdater<'ordi> {
         );
         Ok(())
     }
+}
+
+#[derive(Error, Debug)]
+pub enum InscriptionUpdaterError {
+    #[error("String from utf-8 error: `{0}`")]
+    StringFromUtf8Error(#[from] FromUtf8Error),
+    #[error("Bitcoin rpc error: `{0}`")]
+    BitcoinRpcError(#[from] bitcoincore_rpc::Error),
+    #[error("Try from int error: `{0}`")]
+    TryFromIntError(#[from] TryFromIntError),
+    #[error("Write leveldb error: `{0}`")]
+    WriteLevelDBError(#[from] Status),
 }
 
 pub struct InscriptionUpdater<'block> {
@@ -205,7 +226,7 @@ impl<'block> InscriptionUpdater<'block> {
     fn index_inscriptions_in_transaction(
         &mut self,
         tx: &Hashed<EvaluatedTx>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), InscriptionUpdaterError> {
         debug!("Handle Tx: {}", tx.hash.to_string());
         let mut new_inscriptions = Inscription::from_transaction(tx).into_iter().peekable();
         let mut floating_inscriptions = vec![];
@@ -445,7 +466,7 @@ impl<'block> InscriptionUpdater<'block> {
         vout: u32,
         offset: u64,
         address: &Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), InscriptionUpdaterError> {
         let unbound = match flotsam.origin {
             Origin::Old {
                 old_output,
@@ -566,7 +587,7 @@ impl<'block> InscriptionUpdater<'block> {
         Ok(())
     }
 
-    pub fn flush_update(mut self) -> anyhow::Result<()> {
+    pub fn flush_update(mut self) -> Result<(), InscriptionUpdaterError> {
         self.write_status_wb_str_to_u64(UNBOUND_INSCRIPTIONS, self.unbound_inscriptions);
         self.write_status_wb_str_to_i64(NEXT_ID_NUMBER, self.next_number);
         self.write_status_wb_str_to_i64(NEXT_CURSED_ID_NUMBER, self.next_cursed_number);
