@@ -1,20 +1,18 @@
-use std::fs::File;
-use std::path::PathBuf;
-
-use ordi::block::{InscribeEntry, TransferEntry};
 use ordi::*;
-use simplelog::*;
 
 fn main() -> anyhow::Result<()> {
     let _ = dotenv::dotenv();
-    let inscribe = |entry: InscribeEntry| {
+
+    let mut ordi = Ordi::new(Options::default())?;
+
+    ordi.when_inscribe(|entry| {
         println!(
             "inscribe {}, {} at {}:{}.",
             entry.id, &entry.inscription_id, &entry.txid, entry.vout
         );
-    };
+    });
 
-    let transfer = |entry: TransferEntry| {
+    ordi.when_transfer(|entry| {
         println!(
             "transfer {} from {}:{} to {}:{}:{}.",
             entry.inscription_id,
@@ -24,22 +22,11 @@ fn main() -> anyhow::Result<()> {
             entry.vout,
             entry.offset
         );
-    };
-
-    let ordi_data_dir = PathBuf::from(std::env::var("ordi_data_dir")?.as_str());
-    CombinedLogger::init(vec![WriteLogger::new(
-        LevelFilter::Info,
-        Config::default(),
-        File::create(ordi_data_dir.join("debug.log")).unwrap(),
-    )])?;
-
-    let mut ordi = Ordi::new(Options::default())?;
-    ordi.when_inscribe(inscribe);
-    ordi.when_transfer(transfer);
+    });
 
     // If index_previous_output_value is set true,
-    // dump-event would reindex utxos at height 767430.
-    // Else use rpc to get utxo like ord.
+    // dump-event would reindex utxos until height 767430.
+    // else use rpc to get utxo like ord.
     if std::env::var("index_previous_output_value")? == "true" {
         ordi.index_output_value()?;
     }
