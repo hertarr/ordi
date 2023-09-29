@@ -3,7 +3,7 @@ use std::{path::PathBuf, thread, time::Duration};
 
 use bitcoincore_rpc::{Client, Error, RpcApi};
 use log::info;
-use rusty_leveldb::{Options, Status, WriteBatch, DB};
+use rusty_leveldb::{Status, WriteBatch, DB};
 use thiserror::Error;
 
 use crate::bitcoin::index::IndexError;
@@ -41,6 +41,27 @@ pub enum OrdiError {
     BlockUpdaterError(#[from] BlockUpdaterError),
 }
 
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub btc_data_dir: String,
+    pub ordi_data_dir: String,
+    pub btc_rpc_host: String,
+    pub btc_rpc_user: String,
+    pub btc_rpc_pass: String,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            btc_data_dir: std::env::var("btc_data_dir").unwrap_or_default(),
+            ordi_data_dir: std::env::var("ordi_data_dir").unwrap_or_default(),
+            btc_rpc_host: std::env::var("btc_rpc_host").unwrap_or_default(),
+            btc_rpc_user: std::env::var("btc_rpc_user").unwrap_or_default(),
+            btc_rpc_pass: std::env::var("btc_rpc_pass").unwrap_or_default(),
+        }
+    }
+}
+
 pub struct Ordi {
     pub btc_rpc_client: Client,
     pub status: DB,
@@ -54,34 +75,35 @@ pub struct Ordi {
 }
 
 impl Ordi {
-    pub fn new(in_memory: bool) -> Result<Ordi, OrdiError> {
-        let mut options = if in_memory {
-            rusty_leveldb::in_memory()
-        } else {
-            Options::default()
-        };
-        options.max_file_size = 2 << 25;
+    pub fn new(options: Options) -> Result<Ordi, OrdiError> {
+        let index = Index::new(PathBuf::from(options.btc_data_dir))?;
 
-        let base_path = PathBuf::from(std::env::var("ordi_data_dir")?.as_str());
-        let status = DB::open(base_path.join(ORDI_STATUS), options.clone())?;
-        let output_value = DB::open(base_path.join(ORDI_OUTPUT_VALUE), options.clone())?;
-        let id_inscription = DB::open(base_path.join(ORDI_ID_TO_INSCRIPTION), options.clone())?;
-        let inscription_output =
-            DB::open(base_path.join(ORDI_INSCRIPTION_TO_OUTPUT), options.clone())?;
+        let mut leveldb_options = rusty_leveldb::Options::default();
+        leveldb_options.max_file_size = 2 << 25;
+
+        let ordi_data_dir = PathBuf::from(options.ordi_data_dir);
+        let status = DB::open(ordi_data_dir.join(ORDI_STATUS), leveldb_options.clone())?;
+        let output_value = DB::open(
+            ordi_data_dir.join(ORDI_OUTPUT_VALUE),
+            leveldb_options.clone(),
+        )?;
+        let id_inscription = DB::open(
+            ordi_data_dir.join(ORDI_ID_TO_INSCRIPTION),
+            leveldb_options.clone(),
+        )?;
+        let inscription_output = DB::open(
+            ordi_data_dir.join(ORDI_INSCRIPTION_TO_OUTPUT),
+            leveldb_options.clone(),
+        )?;
         let output_inscription = DB::open(
-            base_path.join(ORDI_OUTPUT_TO_INSCRIPTION),
+            ordi_data_dir.join(ORDI_OUTPUT_TO_INSCRIPTION),
             rusty_leveldb::in_memory(),
         )?;
 
-        let btc_data_dir = std::env::var("btc_data_dir")?;
         let btc_rpc_client = Client::new(
-            std::env::var("btc_rpc_host")?.as_str(),
-            bitcoincore_rpc::Auth::UserPass(
-                std::env::var("btc_rpc_user")?,
-                std::env::var("btc_rpc_pass")?,
-            ),
+            options.btc_rpc_host.as_str(),
+            bitcoincore_rpc::Auth::UserPass(options.btc_rpc_user, options.btc_rpc_pass),
         )?;
-        let index = Index::new(PathBuf::from(btc_data_dir))?;
 
         Ok(Ordi {
             btc_rpc_client,
