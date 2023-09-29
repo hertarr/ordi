@@ -2,6 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use ordi::block::{InscribeEntry, TransferEntry};
+use ordi::*;
 use simplelog::*;
 
 fn main() -> anyhow::Result<()> {
@@ -32,7 +33,7 @@ fn main() -> anyhow::Result<()> {
         File::create(ordi_data_dir.join("debug.log")).unwrap(),
     )])?;
 
-    let mut ordi = ordi::Ordi::new(false)?;
+    let mut ordi = Ordi::new(Options::default())?;
     ordi.when_inscribe(inscribe);
     ordi.when_transfer(transfer);
 
