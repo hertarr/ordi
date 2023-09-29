@@ -1,9 +1,8 @@
-use std::env::VarError;
-use std::{path::PathBuf, thread, time::Duration};
+use std::{fs, path::PathBuf, thread, time::Duration};
 
-use bitcoincore_rpc::{Client, Error, RpcApi};
+use bitcoincore_rpc::{Client, RpcApi};
 use log::info;
-use rusty_leveldb::{Status, WriteBatch, DB};
+use rusty_leveldb::{WriteBatch, DB};
 use thiserror::Error;
 
 use crate::bitcoin::index::IndexError;
@@ -30,15 +29,17 @@ const ORDI_OUTPUT_TO_INSCRIPTION: &str = "output_inscription";
 #[derive(Error, Debug)]
 pub enum OrdiError {
     #[error("Var error: `{0}`")]
-    VarError(#[from] VarError),
+    VarError(#[from] std::env::VarError),
     #[error("Open leveldb error: `{0}`")]
-    OpenLevelDBError(#[from] Status),
+    OpenLevelDBError(#[from] rusty_leveldb::Status),
     #[error("Bitcoin rpc errpr: `{0}`")]
-    BitcoinRpcError(#[from] Error),
+    BitcoinRpcError(#[from] bitcoincore_rpc::Error),
     #[error("Index error: `{0}`")]
     IndexError(#[from] IndexError),
     #[error("BlockUpdater error: `{0}`")]
     BlockUpdaterError(#[from] BlockUpdaterError),
+    #[error("Create Ordi data directory error: `{0}`")]
+    CreateOrdiDataDirError(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -76,12 +77,16 @@ pub struct Ordi {
 
 impl Ordi {
     pub fn new(options: Options) -> Result<Ordi, OrdiError> {
+        let ordi_data_dir = PathBuf::from(options.ordi_data_dir);
+        if !ordi_data_dir.exists() {
+            fs::create_dir(ordi_data_dir.as_path())?;
+        }
+
         let index = Index::new(PathBuf::from(options.btc_data_dir))?;
 
         let mut leveldb_options = rusty_leveldb::Options::default();
         leveldb_options.max_file_size = 2 << 25;
 
-        let ordi_data_dir = PathBuf::from(options.ordi_data_dir);
         let status = DB::open(ordi_data_dir.join(ORDI_STATUS), leveldb_options.clone())?;
         let output_value = DB::open(
             ordi_data_dir.join(ORDI_OUTPUT_VALUE),
