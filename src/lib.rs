@@ -1,13 +1,15 @@
 use std::{fs, path::PathBuf, thread, time::Duration};
 
 use bitcoincore_rpc::{Client, RpcApi};
-use log::info;
+use log::{info, warn};
 use rusty_leveldb::{WriteBatch, DB};
 use thiserror::Error;
 
 use crate::bitcoin::index::IndexError;
+use crate::bitcoin::proto::block::Block;
 use crate::block::{BlockUpdaterError, InscribeUpdater, TransferUpdater, Tx};
 use crate::inscription::Inscription;
+use crate::OrdiError::NoneIndexError;
 use crate::{
     bitcoin::index::{Index, FIRST_INSCRIPTION_HEIGHT},
     block::BlockUpdater,
@@ -36,6 +38,8 @@ pub enum OrdiError {
     BitcoinRpcError(#[from] bitcoincore_rpc::Error),
     #[error("Index error: `{0}`")]
     IndexError(#[from] IndexError),
+    #[error("None index error")]
+    NoneIndexError,
     #[error("BlockUpdater error: `{0}`")]
     BlockUpdaterError(#[from] BlockUpdaterError),
     #[error("Create Ordi data directory error: `{0}`")]
@@ -70,7 +74,7 @@ pub struct Ordi {
     pub id_inscription: DB,
     pub inscription_output: DB,
     pub output_inscription: DB,
-    pub index: Index,
+    pub index: Option<Index>,
     pub inscribe_updaters: Vec<InscribeUpdater>,
     pub transfer_updaters: Vec<TransferUpdater>,
 }
@@ -82,7 +86,11 @@ impl Ordi {
             fs::create_dir(ordi_data_dir.as_path())?;
         }
 
-        let index = Index::new(PathBuf::from(options.btc_data_dir))?;
+        let index = if !options.btc_data_dir.is_empty() {
+            Some(Index::new(PathBuf::from(options.btc_data_dir))?)
+        } else {
+            None
+        };
 
         let mut leveldb_options = rusty_leveldb::Options::default();
         leveldb_options.max_file_size = 2 << 25;
@@ -137,48 +145,61 @@ impl Ordi {
             .expect("Close output_inscription db.");
     }
 
-    pub fn start(&mut self) -> Result<(), OrdiError> {
-        // Catch up latest block.
-        let mut next_height = self.index.max_height + 1;
-        for height in FIRST_INSCRIPTION_HEIGHT..next_height {
-            let block = self.index.catch_block(height)?;
-            let mut block_updater = BlockUpdater::new(
-                height,
-                block,
-                &self.btc_rpc_client,
-                &mut self.status,
-                &mut self.output_value,
-                &mut self.id_inscription,
-                &mut self.inscription_output,
-                &mut self.output_inscription,
-                &self.inscribe_updaters,
-                &self.transfer_updaters,
-            );
+    #[inline]
+    fn new_block_updater(&mut self, height: u64, block: Block) -> BlockUpdater {
+        BlockUpdater::new(
+            height,
+            block,
+            &self.btc_rpc_client,
+            &mut self.status,
+            &mut self.output_value,
+            &mut self.id_inscription,
+            &mut self.inscription_output,
+            &mut self.output_inscription,
+            &self.inscribe_updaters,
+            &self.transfer_updaters,
+        )
+    }
 
-            block_updater.index_transactions()?;
+    pub fn index_height_local(&mut self, height: u64) -> Result<(), OrdiError> {
+        if self.index.is_none() {
+            return Err(NoneIndexError);
         }
 
-        let client = &self.btc_rpc_client;
-        loop {
-            match client.get_block_hash(next_height) {
-                Ok(block_hash) => {
-                    let mut block_updater = BlockUpdater::new(
-                        next_height,
-                        client.get_block(&block_hash)?.into(),
-                        &self.btc_rpc_client,
-                        &mut self.status,
-                        &mut self.output_value,
-                        &mut self.id_inscription,
-                        &mut self.inscription_output,
-                        &mut self.output_inscription,
-                        &self.inscribe_updaters,
-                        &self.transfer_updaters,
-                    );
+        let block = self.index.as_mut().unwrap().catch_block(height)?;
+        let mut block_updater = self.new_block_updater(height, block);
 
-                    block_updater.index_transactions()?;
+        Ok(block_updater.index_transactions()?)
+    }
+
+    pub fn index_height_net(&mut self, height: u64) -> Result<(), OrdiError> {
+        let client = &self.btc_rpc_client;
+        let block_hash = client.get_block_hash(height)?;
+        let block = client.get_block(&block_hash)?;
+
+        let mut block_updater = self.new_block_updater(height, block.into());
+
+        Ok(block_updater.index_transactions()?)
+    }
+
+    pub fn start(&mut self) -> Result<(), OrdiError> {
+        // Catch up latest block without net.
+        let mut next_height = FIRST_INSCRIPTION_HEIGHT;
+
+        if self.index.is_some() {
+            next_height = self.index.as_mut().unwrap().max_height + 1;
+            for height in FIRST_INSCRIPTION_HEIGHT..next_height {
+                self.index_height_local(height)?;
+            }
+        }
+
+        loop {
+            match self.index_height_net(next_height) {
+                Ok(_) => {
                     next_height += 1;
                 }
-                Err(_) => {
+                Err(err) => {
+                    warn!("Index height {} error: {}", next_height, err);
                     thread::sleep(Duration::from_secs(10));
                 }
             };
@@ -186,8 +207,12 @@ impl Ordi {
     }
 
     pub fn index_output_value(&mut self) -> Result<(), OrdiError> {
+        if self.index.is_none() {
+            return Err(NoneIndexError);
+        }
+
         for height in 0..FIRST_INSCRIPTION_HEIGHT {
-            let block = self.index.catch_block(height)?;
+            let block = self.index.as_mut().unwrap().catch_block(height)?;
             for (_tx_index, tx) in block.txs.iter().enumerate() {
                 self.index_output_value_in_transaction(&tx)?;
             }
