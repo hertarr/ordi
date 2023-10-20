@@ -54,11 +54,24 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
-            btc_data_dir: std::env::var("btc_data_dir").unwrap_or_default(),
-            ordi_data_dir: std::env::var("ordi_data_dir").unwrap_or_default(),
-            btc_rpc_host: std::env::var("btc_rpc_host").unwrap_or_default(),
-            btc_rpc_user: std::env::var("btc_rpc_user").unwrap_or_default(),
-            btc_rpc_pass: std::env::var("btc_rpc_pass").unwrap_or_default(),
+            btc_data_dir: check_env("btc_data_dir"),
+            ordi_data_dir: check_env("ordi_data_dir"),
+            btc_rpc_host: check_env("btc_rpc_host"),
+            btc_rpc_user: check_env("btc_rpc_user"),
+            btc_rpc_pass: check_env("btc_rpc_pass"),
+        }
+    }
+}
+
+fn check_env(env: &str) -> String {
+    match std::env::var(env) {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!(
+                "env `{}` doesn't exist,please read readme.md or .env.example in `https://github.com/hertarr/ordi` and set it.",
+                env
+            );
+            std::process::exit(1)
         }
     }
 }
